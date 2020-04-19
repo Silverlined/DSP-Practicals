@@ -2,6 +2,7 @@ import sounddevice as sd
 import soundfile as sf
 import numpy as np
 import math
+from scipy.signal import butter, lfilter
 from scipy.io import wavfile
 from matplotlib import pyplot
 
@@ -83,6 +84,7 @@ def applyFourierFilters(time_series, num_samples, sample_rate, sample_spacing):
     recordAudio("filtered_1", sample_rate, filtered_y1)
     recordAudio("filtered_2", sample_rate, filtered_y2)
 
+    # plotSpectogram(filtered_y1 sample_rate)
     plotSection(8150, 8250, y, filtered_y1, filtered_y2)
     playAudio("filtered_1.wav")
 
@@ -109,14 +111,37 @@ def fir_high_pass(time_series, fs, fc, filter_len, outputType):
 
 
 def applyTimeDomainFiltering(time_series, sample_rate):
-    s1, h1 = fir_low_pass(time_series, sample_rate, fc=1320, filter_len=311, outputType=np.int16)
-    s2, h2 = fir_high_pass(time_series, sample_rate, fc=441, filter_len=311, outputType=np.int16)
+    filtered_1, h1 = fir_low_pass(time_series, sample_rate, fc=1320, filter_len=311, outputType=np.int16)
+    filtered_2, h2 = fir_high_pass(time_series, sample_rate, fc=441, filter_len=311, outputType=np.int16)
 
-    recordAudio("filtered_1.wav", sample_rate, s1)
-    recordAudio("filtered_2.wav", sample_rate, s2)
+    recordAudio("filtered_1.wav", sample_rate, filtered_1)
+    recordAudio("filtered_2.wav", sample_rate, filtered_2)
 
-    plotSection(8150, 8250, time_series, s1, s2)
+    # plotSpectogram(filtered_2, sample_rate)
+    plotSection(8150, 8250, time_series, filtered_1, filtered_2)
     playAudio("filtered_1.wav")
+
+
+def applyButterworthFiltering(time_series, sample_rate):
+    N = 8  # Filter Order
+    nyq = 0.5 * sample_rate
+    lowcut = 1320
+    fc_low = lowcut / nyq  # normalized cut-off frequency
+    highcut = 440
+    fc_high = highcut / nyq  # normalized cut-off frequency
+
+    lowpass_b, lowpass_a = butter(N, fc_low, btype="lowpass")
+    highpass_b, highpass_a = butter(N, fc_high, btype="highpass")
+
+    filtered_1 = lfilter(lowpass_b, lowpass_a, time_series)
+    filtered_2 = lfilter(highpass_b, highpass_a, time_series)
+
+    recordAudio("filtered_1.wav", sample_rate, filtered_1)
+    recordAudio("filtered_2.wav", sample_rate, filtered_2)
+
+    # plotSpectogram(filtered_2, sample_rate)
+    plotSection(8150, 8250, time_series, filtered_1, filtered_2)
+    playAudio("filtered_2.wav")
 
 
 def main():
@@ -135,6 +160,7 @@ def main():
     # plotSpectogram(pcm_values, frame_rate)
     # applyFourierFilters(pcm_values, num_samples, frame_rate, T)
     # applyTimeDomainFiltering(pcm_values, frame_rate)
+    # applyButterworthFiltering(pcm_values, frame_rate)
 
 
 if __name__ == "__main__":
