@@ -1,67 +1,140 @@
-import matplotlib.pyplot as plt
-from scipy.io import wavfile
+import sounddevice as sd
+import soundfile as sf
 import numpy as np
 import math
-import pylab
-from matplotlib.ticker import FormatStrFormatter, FuncFormatter
+from scipy.io import wavfile
+from matplotlib import pyplot
 
 
-def getFormat(x, pos):
-    "The two args are the value and tick position"
-    if x >= 1e6:
-        return "%1.1fM" % (x / 1e6)
-    else:
-        return "%dK" % (x / 1000)
+def playAudio(file_path):
+    data, fs = sf.read(file_path)
+    sd.play(data, samplerate=fs)
+    status = sd.wait()
 
 
-formatter = FuncFormatter(getFormat)
+def recordAudio(file_name, sample_rate, audio_samples):
+    audio_samples = audio_samples.astype(np.int16)
+    wavfile.write(file_name, sample_rate, audio_samples)
 
 
-def graphSignal(time, pcm_values, dft_frequencies, dft_y):
-    pylab.figure(figsize=(19, 12))
-    pylab.subplot(211)
-    pylab.title("Signal wave")
-    pylab.ylabel("Amplitude")
-    pylab.xlabel("Time (s)")
-    pylab.plot(time, pcm_values)
-    plot2 = pylab.subplot(212)
-    pylab.title("DFT of %s" % "Laurel-Yanny")
-    pylab.ylabel("")
-    pylab.xlabel("Frequency [Hz]")
+def plotAudioSignal(time, time_series, dft_frequencies, dft_y):
+    pyplot.figure(figsize=(19, 12))
+    pyplot.subplot(211)
+    pyplot.title("Audio time series")
+    pyplot.ylabel("Amplitude")
+    pyplot.xlabel("Time (s)")
+    pyplot.plot(time, time_series)
+    plot2 = pyplot.subplot(212)
+    pyplot.title("DFT of %s" % "Laurel-Yanny")
+    pyplot.ylabel("")
+    pyplot.xlabel("Frequency [Hz]")
     # plot2.yaxis.set_major_formatter(formatter)
-    pylab.plot(dft_frequencies, abs(dft_y.real))
-    pylab.show()
+    pyplot.plot(dft_frequencies, abs(dft_y.real))
+    pyplot.show()
 
 
-def getSpectogram(pcm_values):
-    signalBins = []
-    i = 0
-    while i < len(pcm_values):
-        signal = pcm_values[i : (i + 499)]
-        signalBins.append(np.fft.rfft(signal))
-        i += 500
-    print(len(signalBins))
-    return signalBins
+def plotSpectogram(time_series, sample_rate):
+    pyplot.title("Spectrogram of %s" % "Laurel-Yanny")
+    pyplot.ylabel("Frequency [Hz]")
+    pyplot.xlabel("Time [s]")
+    pyplot.specgram(time_series, NFFT=512, Fs=sample_rate, mode="psd")
+    pyplot.show()
+
+
+def plotSection(start, end, y, filtered_y1, filtered_y2):
+    # Plot short section of time series
+    xlim = (start, end)
+    section_range = np.arange(xlim[0], xlim[1] + 1)
+    pyplot.plot(section_range, y[section_range], "k")
+    pyplot.plot(section_range, filtered_y1[section_range], "b")
+    pyplot.plot(section_range, filtered_y2[section_range], "r")
+    pyplot.ylim([1.5 * y[section_range].min(), 1.5 * y[section_range].max()])
+    pyplot.xlim(xlim)
+    pyplot.legend(["y", "< 1320 Hz", "> 440 Hz"])
+    pyplot.title("Fourier filters")
+    pyplot.grid()
+    pyplot.show()
+
+
+def computeDFT(time_series, num_samples, sample_spacing):
+    dft_y = np.fft.rfft(time_series)
+    dft_frequencies = np.fft.rfftfreq(num_samples, d=sample_spacing)
+    return dft_frequencies, dft_y
+
+
+def applyFourierFilters(time_series, num_samples, sample_rate, sample_spacing):
+    y = time_series
+    dft_frequencies, dft_y = computeDFT(time_series, num_samples, sample_spacing)
+
+    # Find DFT indices corresponding to frequency ranges to zero out
+    flt1 = dft_frequencies < 1320
+    flt2 = dft_frequencies > 440
+
+    dft_y_copy = dft_y.copy()
+    dft_y_copy[flt1] = 0
+    attenuated_y = np.fft.irfft(dft_y_copy)
+    filtered_y1 = y - attenuated_y
+
+    dft_y_copy = dft_y.copy()
+    dft_y_copy[flt2] = 0
+    attenuated_y = np.fft.irfft(dft_y_copy)
+    filtered_y2 = y - attenuated_y
+
+    recordAudio("filtered_1", sample_rate, filtered_y1)
+    recordAudio("filtered_2", sample_rate, filtered_y2)
+
+    plotSection(8150, 8250, y, filtered_y1, filtered_y2)
+    playAudio("filtered_1.wav")
+
+
+def fir_low_pass(time_series, fs, fc, filter_len, outputType):
+    h = np.sinc(2 * fc / fs * (np.arange(filter_len) - (filter_len - 1) / 2))  # Compute sinc filter.
+
+    h *= np.hamming(filter_len)  # Apply window.
+
+    h /= np.sum(h)  # Normalize to get unity gain.
+
+    filtered_signal = np.convolve(time_series, h).astype(outputType)
+    return filtered_signal, h
+
+
+def fir_high_pass(time_series, fs, fc, filter_len, outputType):
+    # Create a high-pass filter from the low-pass filter through spectral inversion.
+    signal, h = fir_low_pass(time_series, fs, fc, filter_len, outputType)
+    h = -h
+    h[(filter_len - 1) // 2] += 1
+
+    filtered_signal = np.convolve(time_series, h).astype(outputType)
+    return filtered_signal, h
+
+
+def applyTimeDomainFiltering(time_series, sample_rate):
+    s1, h1 = fir_low_pass(time_series, sample_rate, fc=1320, filter_len=311, outputType=np.int16)
+    s2, h2 = fir_high_pass(time_series, sample_rate, fc=441, filter_len=311, outputType=np.int16)
+
+    recordAudio("filtered_1.wav", sample_rate, s1)
+    recordAudio("filtered_2.wav", sample_rate, s2)
+
+    plotSection(8150, 8250, time_series, s1, s2)
+    playAudio("filtered_1.wav")
 
 
 def main():
     file_path = "laurel_yanny.wav"
 
     frame_rate, pcm_values = wavfile.read(file_path)
+    # playAudio(file_path)
 
-    N = len(pcm_values)  # Number of sample points
+    num_samples = len(pcm_values)  # Number of sample points
     T = 1.0 / frame_rate  # Sample spacing/period
-    time = np.linspace(start=0, stop=N / frame_rate, num=len(pcm_values))
+    time = np.linspace(start=0, stop=num_samples / frame_rate, num=len(pcm_values))
 
-    dft_y = np.fft.rfft(pcm_values)
-    dft_frequencies = np.fft.rfftfreq(N, d=T)
+    dft_frequencies, dft_y = computeDFT(pcm_values, num_samples, T)
 
-    pylab.title("Spectrogram of %s" % "Laurel-Yanny")
-    pylab.ylabel("Frequency [Hz]")
-    pylab.xlabel("Time (s)")
-    pylab.specgram(pcm_values, NFFT=512, Fs=frame_rate, mode="psd")
-
-    graphSignal(time, pcm_values, dft_frequencies, dft_y)
+    # plotAudioSignal(time, pcm_values, dft_frequencies, dft_y)
+    # plotSpectogram(pcm_values, frame_rate)
+    # applyFourierFilters(pcm_values, num_samples, frame_rate, T)
+    # applyTimeDomainFiltering(pcm_values, frame_rate)
 
 
 if __name__ == "__main__":
